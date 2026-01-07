@@ -3,8 +3,8 @@ import "./globals.css";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "通勤风穿搭板 - Outfit Planner",
-  description: "AI驱动的一周通勤穿搭规划工具",
+  title: "我的电子衣柜 - Outfit Planner",
+  description: "有了电子衣柜，随时随地衣物搭配",
 };
 
 export default function RootLayout({
@@ -37,6 +37,12 @@ export default function RootLayout({
                     className="text-gray-600 hover:text-gray-900 transition-colors flex items-center"
                   >
                     一周计划
+                  </Link>
+                  <Link
+                    href="/about"
+                    className="text-gray-600 hover:text-gray-900 transition-colors flex items-center"
+                  >
+                    关于
                   </Link>
                 </div>
               </div>

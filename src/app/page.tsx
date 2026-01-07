@@ -5,13 +5,13 @@ export default function HomePage() {
     <div className="max-w-4xl mx-auto">
       <div className="text-center mb-16">
         <h1 className="text-5xl font-bold text-gray-900 mb-6">
-          通勤风穿搭板
+        我的电子衣柜
         </h1>
         <p className="text-xl text-gray-600 mb-4">
-          AI驱动的一周穿搭规划工具
+          有了电子衣柜，随时随地衣物搭配
         </p>
         <p className="text-gray-500">
-          简洁 · 干练 · 通勤风
+          简洁 · 干练 · 通勤风 · 更多风格敬请期待
         </p>
       </div>
 
