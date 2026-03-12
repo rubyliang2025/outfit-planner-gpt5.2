@@ -3,11 +3,131 @@ import { ClothingItem } from '@/types/clothing';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
+const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat/v1';
+
+async function callOpenRouter(
+  images: string[],
+  userPrompt: string,
+  systemPrompt?: string
+): Promise<{ content: string; provider: string } | null> {
+  if (!OPENROUTER_API_KEY) return null;
+
+  // 构建多模态 user message：图片 + 文字
+  const userContent: any[] = images.map((img) => ({
+    type: 'image_url',
+    image_url: { url: img },
+  }));
+  userContent.push({ type: 'text', text: userPrompt });
+
+  const messages: any[] = [];
+  if (systemPrompt) {
+    messages.push({ role: 'system', content: systemPrompt });
+  }
+  messages.push({ role: 'user', content: userContent });
+
+  try {
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-sonnet-4.5',
+        messages,
+        temperature: 0.3,
+        max_tokens: 4000,
+      }),
+    });
+
+    const responseText = await response.text();
+    console.log('OpenRouter 响应:', response.status, responseText.substring(0, 500));
+
+    if (response.ok) {
+      const data = JSON.parse(responseText);
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        return { content, provider: 'OpenRouter (Claude)' };
+      }
+    } else {
+      console.error('OpenRouter 错误:', response.status, responseText);
+    }
+  } catch (error) {
+    console.error('OpenRouter 调用失败:', error);
+  }
+
+  return null;
+}
+
+async function callMinimaxVision(
+  prompt: string,
+  images: string[]
+): Promise<{ content: string; provider: string } | null> {
+  if (!MINIMAX_API_KEY) return null;
+
+  try {
+    // 构建多模态消息
+    const contents: any[] = [];
+
+    // 添加图片
+    for (const img of images) {
+      contents.push({
+        type: 'image_url',
+        image_url: {
+          url: img,
+        },
+      });
+    }
+
+    // 添加文本 prompt
+    contents.push({
+      type: 'text',
+      text: prompt,
+    });
+
+    const response = await fetch(`${MINIMAX_BASE_URL}/text/chatcompletion_v2`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${MINIMAX_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'MiniMax-M2',
+        messages: [
+          {
+            role: 'user',
+            content: contents,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 4000,
+      }),
+    });
+
+    const responseText = await response.text();
+    console.log('Minimax 响应:', response.status, responseText.substring(0, 500));
+
+    if (response.ok) {
+      const data = JSON.parse(responseText);
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        return { content, provider: 'Minimax (M2)' };
+      }
+    } else {
+      console.error('Minimax 错误:', response.status, responseText);
+    }
+  } catch (error) {
+    console.error('Minimax 调用失败:', error);
+  }
+
+  return null;
+}
 
 export async function POST(request: NextRequest) {
-  if (!OPENROUTER_API_KEY) {
+  if (!OPENROUTER_API_KEY && !MINIMAX_API_KEY) {
     return NextResponse.json(
-      { error: '服务端配置错误: 缺少 OPENROUTER_API_KEY' },
+      { error: '服务端配置错误: 缺少 API Key' },
       { status: 500 }
     );
   }
@@ -23,85 +143,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const systemPrompt = `你是专业的服装识别助手。分析用户上传的衣服照片，返回严格的JSON数组格式。
+    const systemPrompt = `你是专业的服装识别助手。分析用户上传的衣服照片。
 
-要求：
-1. 必须返回纯JSON，不能有任何解释文字
-2. 每件衣物必须包含字段：id, imageDataUrl, primary, secondary, seasons, colors, styleTags, notes
-3. primary 只能是 "top" 或 "bottom"
-4. secondary 只能是 "inner", "outer", "unknown"
-5. seasons 是数组，可选值："spring", "summer", "autumn", "winter", "all-season"
-6. colors 是颜色数组，用中文描述（如："黑色"、"白色"、"灰色"）
-7. styleTags 是风格标签数组（如："通勤"、"商务"、"休闲"、"简约"）
-8. notes 可选，简短备注
-9. 如果不确定某个字段，用 "unknown" 或空数组，不要胡编
+请返回纯JSON格式，不要任何解释文字。格式如下：
+{"items":[{"id":"item_1","primary":"top","secondary":"outer","seasons":["autumn","winter"],"colors":["黑色"],"styleTags":["商务","通勤"],"notes":"西装外套"}]}
 
-示例返回：
-{
-  "items": [
-    {
-      "id": "item_1",
-      "imageDataUrl": "原图DataURL",
-      "primary": "top",
-      "secondary": "outer",
-      "seasons": ["autumn", "winter"],
-      "colors": ["黑色"],
-      "styleTags": ["商务", "通勤", "简约"],
-      "notes": "西装外套"
+字段说明：
+- primary: "top" 或 "bottom"
+- secondary: "inner", "outer", "unknown"
+- seasons: 数组，可选spring/summer/autumn/winter/all-season
+- colors: 中文颜色数组，如["黑色","白色"]
+- styleTags: 风格标签数组，如["通勤","商务"]
+- notes: 简短备注
+
+只返回JSON，不要其他文字。`;
+
+    const userPrompt = `请分析这${images.length}张衣服照片，返回JSON格式的识别结果。`;
+
+    let result: { content: string; provider: string } | null = null;
+
+    // 先尝试 OpenRouter
+    result = await callOpenRouter(images, userPrompt, systemPrompt);
+
+    if (!result) {
+      // 备用：使用 Minimax 视觉模型
+      console.log('OpenRouter 不可用，尝试 Minimax...');
+      result = await callMinimaxVision(systemPrompt + '\n\n' + userPrompt, images);
     }
-  ]
-}`;
 
-    const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
-      {
-        type: 'text',
-        text: `请分析这${images.length}张衣服照片，返回JSON格式的识别结果。`,
-      },
-    ];
-
-    images.forEach((dataUrl: string, index: number) => {
-      userContent.push({
-        type: 'image_url',
-        image_url: {
-          url: dataUrl,
-        },
-      });
-    });
-
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4.5',
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt,
-          },
-          {
-            role: 'user',
-            content: userContent,
-          },
-        ],
-        temperature: 0.3,
-        max_tokens: 4000,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('OpenRouter API 错误:', errorText);
+    if (!result) {
       return NextResponse.json(
-        { error: `AI服务错误: ${response.status} ${response.statusText}` },
-        { status: response.status }
+        { error: 'AI服务暂时不可用，请稍后再试' },
+        { status: 500 }
       );
     }
 
-    const aiResponse = await response.json();
-    const content = aiResponse.choices?.[0]?.message?.content;
+    console.log(`使用AI服务商: ${result.provider}`);
+    const content = result.content;
 
     if (!content) {
       return NextResponse.json(
@@ -112,16 +190,24 @@ export async function POST(request: NextRequest) {
 
     let parsedResult;
     try {
-      // 去除可能的 markdown 代码块标记
       let cleanContent = content.trim();
+      console.log('AI原始返回:', cleanContent.substring(0, 500));
+
       if (cleanContent.startsWith('```json')) {
         cleanContent = cleanContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
       } else if (cleanContent.startsWith('```')) {
         cleanContent = cleanContent.replace(/^```\s*/, '').replace(/\s*```$/, '');
       }
+
+      // 尝试提取JSON部分
+      const jsonMatch = cleanContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleanContent = jsonMatch[0];
+      }
+
       parsedResult = JSON.parse(cleanContent);
-    } catch {
-      console.error('AI 返回非JSON格式:', content);
+    } catch (e) {
+      console.error('AI 返回非JSON格式:', content.substring(0, 1000));
       return NextResponse.json(
         { error: 'AI返回格式错误，请重试' },
         { status: 500 }
@@ -134,11 +220,11 @@ export async function POST(request: NextRequest) {
       id: `item_${Date.now()}_${index}`,
     }));
 
-    return NextResponse.json({ items: itemsWithImages });
+    return NextResponse.json({ items: itemsWithImages, provider: result.provider });
   } catch (error) {
     console.error('分析失败:', error);
     return NextResponse.json(
-      { error: '服务器内部错误' },
+      { error: '服务器内部错误: ' + (error as Error).message },
       { status: 500 }
     );
   }

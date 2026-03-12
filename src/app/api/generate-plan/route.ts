@@ -1,13 +1,91 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GeneratePlanRequest, WeeklyPlan } from '@/types/clothing';
 
+export const config = {
+  api: { bodyParser: { sizeLimit: '10mb' } },
+};
+
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
+const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL || 'https://api.minimax.chat/v1';
+
+async function callWithFallback(prompt: string): Promise<{ content: string; provider: string }> {
+  // 先尝试 OpenRouter (Claude)
+  if (OPENROUTER_API_KEY) {
+    try {
+      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-sonnet-4.5',
+          messages: [
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          temperature: 0.5,
+          max_tokens: 3000,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (content) {
+          return { content, provider: 'OpenRouter (Claude)' };
+        }
+      }
+    } catch (error) {
+      console.error('OpenRouter 调用失败:', error);
+    }
+  }
+
+  // 备用：使用 Minimax
+  if (MINIMAX_API_KEY) {
+    try {
+      const response = await fetch(`${MINIMAX_BASE_URL}/text/chatcompletion_v2`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${MINIMAX_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'MiniMax-M2',
+          messages: [
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          temperature: 0.5,
+          max_tokens: 3000,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (content) {
+          return { content, provider: 'Minimax' };
+        }
+      }
+    } catch (error) {
+      console.error('Minimax 调用失败:', error);
+    }
+  }
+
+  throw new Error('所有AI服务都不可用');
+}
 
 export async function POST(request: NextRequest) {
-  if (!OPENROUTER_API_KEY) {
+  if (!OPENROUTER_API_KEY && !MINIMAX_API_KEY) {
     return NextResponse.json(
-      { error: '服务端配置错误: 缺少 OPENROUTER_API_KEY' },
+      { error: '服务端配置错误: 缺少 API Key' },
       { status: 500 }
     );
   }
@@ -69,40 +147,10 @@ ${JSON.stringify(itemsSimplified, null, 2)}
 
 请为我生成一周（周一到周日）的通勤穿搭计划。`;
 
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4.5',
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt,
-          },
-          {
-            role: 'user',
-            content: userPrompt,
-          },
-        ],
-        temperature: 0.5,
-        max_tokens: 3000,
-      }),
-    });
+    const result = await callWithFallback(systemPrompt + '\n\n' + userPrompt);
+    console.log(`使用AI服务商: ${result.provider}`);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('OpenRouter API 错误:', errorText);
-      return NextResponse.json(
-        { error: `AI服务错误: ${response.status} ${response.statusText}` },
-        { status: response.status }
-      );
-    }
-
-    const aiResponse = await response.json();
-    const content = aiResponse.choices?.[0]?.message?.content;
+    const content = result.content;
 
     if (!content) {
       return NextResponse.json(
@@ -113,7 +161,6 @@ ${JSON.stringify(itemsSimplified, null, 2)}
 
     let parsedResult: WeeklyPlan;
     try {
-      // 去除可能的 markdown 代码块标记
       let cleanContent = content.trim();
       if (cleanContent.startsWith('```json')) {
         cleanContent = cleanContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
@@ -136,11 +183,11 @@ ${JSON.stringify(itemsSimplified, null, 2)}
       );
     }
 
-    return NextResponse.json(parsedResult);
+    return NextResponse.json({ ...parsedResult, provider: result.provider });
   } catch (error) {
     console.error('生成计划失败:', error);
     return NextResponse.json(
-      { error: '服务器内部错误' },
+      { error: '服务器内部错误，所有AI服务均不可用' },
       { status: 500 }
     );
   }
